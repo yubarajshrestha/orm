@@ -3,7 +3,7 @@ from ..Table import Table
 
 
 class MySQLPlatform(Platform):
-    types_without_lengths = []
+    types_without_lengths = ["enum"]
 
     type_map = {
         "string": "VARCHAR",
@@ -11,10 +11,10 @@ class MySQLPlatform(Platform):
         "integer": "INT",
         "big_integer": "BIGINT",
         "tiny_integer": "TINYINT",
-        "big_increments": "BIGINT AUTO_INCREMENT",
+        "big_increments": "BIGINT UNSIGNED AUTO_INCREMENT",
         "small_integer": "SMALLINT",
         "medium_integer": "MEDIUMINT",
-        "increments": "INT UNSIGNED AUTO_INCREMENT PRIMARY KEY",
+        "increments": "INT UNSIGNED AUTO_INCREMENT",
         "uuid": "CHAR",
         "binary": "LONGBLOB",
         "boolean": "BOOLEAN",
@@ -46,12 +46,59 @@ class MySQLPlatform(Platform):
         "null": " DEFAULT NULL",
     }
 
+    def columnize(self, columns):
+        sql = []
+        for name, column in columns.items():
+            if column.length:
+                length = self.create_column_length(column.column_type).format(
+                    length=column.length
+                )
+            else:
+                length = ""
+
+            if column.default in (0,):
+                default = f" DEFAULT {column.default}"
+            elif column.default in self.premapped_defaults:
+                default = self.premapped_defaults.get(column.default)
+            elif column.default:
+                if isinstance(column.default, (str,)):
+                    default = f" DEFAULT '{column.default}'"
+                else:
+                    default = f" DEFAULT {column.default}"
+            else:
+                default = ""
+
+            constraint = ""
+            column_constraint = ""
+            if column.primary:
+                constraint = "PRIMARY KEY"
+
+            if column.column_type == "enum":
+                values = ", ".join(f"'{x}'" for x in column.values)
+                column_constraint = f"({values})"
+
+            sql.append(
+                self.columnize_string()
+                .format(
+                    name=self.get_column_string().format(column=column.name),
+                    data_type=self.type_map.get(column.column_type, ""),
+                    column_constraint=column_constraint,
+                    length=length,
+                    constraint=constraint,
+                    nullable=self.premapped_nulls.get(column.is_null) or "",
+                    default=default,
+                )
+                .strip()
+            )
+
+        return sql
+
     def compile_create_sql(self, table):
         sql = []
 
         sql.append(
             self.create_format().format(
-                table=table.name,
+                table=self.get_table_string().format(table=table.name),
                 columns=", ".join(self.columnize(table.get_added_columns())).strip(),
                 constraints=", "
                 + ", ".join(self.constraintize(table.get_added_constraints(), table))
@@ -85,7 +132,7 @@ class MySQLPlatform(Platform):
                 add_columns.append(
                     self.add_column_string()
                     .format(
-                        name=column.name,
+                        name=self.get_column_string().format(column=column.name),
                         data_type=self.type_map.get(column.column_type, ""),
                         length=length,
                         constraint="PRIMARY KEY" if column.primary else "",
@@ -113,7 +160,12 @@ class MySQLPlatform(Platform):
                     length = ""
 
                 renamed_sql.append(
-                    self.rename_column_string().format(to=column.name, old=name).strip()
+                    self.rename_column_string()
+                    .format(
+                        to=self.get_column_string().format(column=column.name),
+                        old=self.get_column_string().format(column=name),
+                    )
+                    .strip()
                 )
 
             sql.append(
@@ -124,12 +176,12 @@ class MySQLPlatform(Platform):
             )
 
         if table.changed_columns:
-
             sql.append(
                 self.alter_format().format(
                     table=self.wrap_table(table.name),
-                    columns="MODIFY "
-                    + ", ".join(self.columnize(table.changed_columns)),
+                    columns=", ".join(
+                        f"MODIFY {x}" for x in self.columnize(table.changed_columns)
+                    ),
                 )
             )
 
@@ -137,7 +189,11 @@ class MySQLPlatform(Platform):
             dropped_sql = []
 
             for name in table.get_dropped_columns():
-                dropped_sql.append(self.drop_column_string().format(name=name).strip())
+                dropped_sql.append(
+                    self.drop_column_string()
+                    .format(name=self.get_column_string().format(column=name))
+                    .strip()
+                )
 
             sql.append(
                 self.alter_format().format(
@@ -197,7 +253,7 @@ class MySQLPlatform(Platform):
         return "RENAME COLUMN {old} TO {to}"
 
     def columnize_string(self):
-        return "{name} {data_type}{length} {nullable}{default} {constraint}"
+        return "{name} {data_type}{length}{column_constraint} {nullable}{default} {constraint}"
 
     def constraintize(self, constraints, table):
         sql = []
@@ -216,6 +272,9 @@ class MySQLPlatform(Platform):
 
     def get_table_string(self):
         return "`{table}`"
+
+    def get_column_string(self):
+        return "`{column}`"
 
     def create_format(self):
         return "CREATE TABLE {table} ({columns}{constraints}{foreign_keys})"
