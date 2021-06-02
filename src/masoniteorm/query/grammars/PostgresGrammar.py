@@ -31,6 +31,9 @@ class PostgresGrammar(BaseGrammar):
         "delete": '{table}."{column}"{separator}',
     }
 
+    def select_no_table(self):
+        return "SELECT {columns}"
+
     def select_format(self):
         return "SELECT {columns} FROM {table} {joins} {wheres} {group_by} {order_by} {limit} {offset} {having}"
 
@@ -181,3 +184,14 @@ class PostgresGrammar(BaseGrammar):
 
     def where_not_null_string(self):
         return " {keyword} {column} IS NOT NULL"
+
+    def truncate_table(self, table, foreign_keys=False):
+        """Specifies a truncate table expression.
+
+        Arguments;
+            table {string} -- The name of the table to truncate.
+
+        Returns:
+            string
+        """
+        return f"TRUNCATE TABLE {self.wrap_table(table)}"

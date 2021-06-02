@@ -9,14 +9,12 @@ class MigrateCommand(Command):
 
     migrate
         {--c|connection=default : The connection you want to run migrations on}
-        {--d|directory=databases/migrations : The location of the migration directory}
         {--f|force : Force migrations without prompt in production}
         {--s|show : Shows the output of SQL for migrations that would be running}
+        {--d|directory=databases/migrations : The location of the migration directory}
     """
 
     def handle(self):
-        from config.database import DB
-
         # prompt user for confirmation in production
         if os.getenv("APP_ENV") == "production" and not self.option("force"):
             answer = ""

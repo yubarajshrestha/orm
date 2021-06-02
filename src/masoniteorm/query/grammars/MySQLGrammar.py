@@ -22,38 +22,6 @@ class MySQLGrammar(BaseGrammar):
         "right_inner": "RIGHT INNER JOIN",
     }
 
-    type_map = {
-        "string": "VARCHAR",
-        "char": "CHAR",
-        "integer": "INT",
-        "big_integer": "BIGINT",
-        "tiny_integer": "TINYINT",
-        "big_increments": "BIGINT AUTO_INCREMENT",
-        "small_integer": "SMALLINT",
-        "medium_integer": "MEDIUMINT",
-        "increments": "INT UNSIGNED AUTO_INCREMENT PRIMARY KEY",
-        "binary": "LONGBLOB",
-        "boolean": "BOOLEAN",
-        "decimal": "DECIMAL",
-        "double": "DOUBLE",
-        "enum": "ENUM",
-        "text": "TEXT",
-        "float": "FLOAT",
-        "geometry": "GEOMETRY",
-        "json": "JSON",
-        "jsonb": "LONGBLOB",
-        "long_text": "LONGTEXT",
-        "point": "POINT",
-        "time": "TIME",
-        "timestamp": "TIMESTAMP",
-        "date": "DATE",
-        "year": "YEAR",
-        "datetime": "DATETIME",
-        "tiny_increments": "TINYINT AUTO_INCREMENT",
-        "unsigned": "INT UNSIGNED",
-        "unsigned_integer": "INT UNSIGNED",
-    }
-
     """Column strings are formats for how columns and key values should be formatted
     on specific queries. These can be different depending on the type of query.
 
@@ -80,6 +48,9 @@ class MySQLGrammar(BaseGrammar):
 
     def select_format(self):
         return "SELECT {columns} FROM {table} {joins} {wheres} {group_by} {order_by} {limit} {offset} {having}"
+
+    def select_no_table(self):
+        return "SELECT {columns}"
 
     def update_format(self):
         return "UPDATE {table} SET {key_equals} {wheres}"
@@ -132,7 +103,17 @@ class MySQLGrammar(BaseGrammar):
         Returns:
             self
         """
-        return ".".join(self.table_string().format(table=t) for t in table.split("."))
+        if not table:
+            return ""
+        if isinstance(table, str):
+            return ".".join(
+                self.table_string().format(table=t) for t in table.split(".")
+            )
+        if table.raw:
+            return table.name
+        return ".".join(
+            self.table_string().format(table=t) for t in table.name.split(".")
+        )
 
     def subquery_alias_string(self):
         return "AS {alias}"
@@ -214,3 +195,27 @@ class MySQLGrammar(BaseGrammar):
 
     def where_not_null_string(self):
         return " {keyword} {column} IS NOT NULL"
+
+    def enable_foreign_key_constraints(self):
+        return "SET FOREIGN_KEY_CHECKS=1"
+
+    def disable_foreign_key_constraints(self):
+        return "SET FOREIGN_KEY_CHECKS=0"
+
+    def truncate_table(self, table, foreign_keys=False):
+        """Specifies a truncate table expression.
+
+        Arguments;
+            table {string} -- The name of the table to truncate.
+
+        Returns:
+            self
+        """
+        if not foreign_keys:
+            return f"TRUNCATE TABLE {self.wrap_table(table)}"
+
+        return [
+            self.disable_foreign_key_constraints(),
+            f"TRUNCATE TABLE {self.wrap_table(table)}",
+            self.enable_foreign_key_constraints(),
+        ]

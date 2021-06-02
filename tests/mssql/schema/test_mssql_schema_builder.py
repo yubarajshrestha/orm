@@ -59,6 +59,24 @@ class TestMSSQLSchemaBuilder(unittest.TestCase):
             "CONSTRAINT users_profile_id_foreign FOREIGN KEY (profile_id) REFERENCES profiles(id))",
         )
 
+    def test_can_add_columns_with_add_foreign_constaint(self):
+        with self.schema.create("users") as blueprint:
+            blueprint.string("name").unique()
+            blueprint.integer("age")
+            blueprint.integer("profile_id")
+            blueprint.add_foreign("profile_id.id.profiles")
+
+        self.assertEqual(len(blueprint.table.added_columns), 3)
+        self.assertEqual(
+            blueprint.to_sql(),
+            "CREATE TABLE [users] "
+            "([name] VARCHAR(255) NOT NULL, "
+            "[age] INT NOT NULL, "
+            "[profile_id] INT NOT NULL, "
+            "CONSTRAINT users_name_unique UNIQUE (name), "
+            "CONSTRAINT users_profile_id_foreign FOREIGN KEY (profile_id) REFERENCES profiles(id))",
+        )
+
     def test_can_advanced_table_creation(self):
         with self.schema.create("users") as blueprint:
             blueprint.increments("id")
@@ -88,6 +106,9 @@ class TestMSSQLSchemaBuilder(unittest.TestCase):
             blueprint.string("name")
             blueprint.string("duration")
             blueprint.string("url")
+            blueprint.inet("last_address").nullable()
+            blueprint.cidr("route_origin").nullable()
+            blueprint.macaddr("mac_address").nullable()
             blueprint.datetime("published_at")
             blueprint.string("thumbnail").nullable()
             blueprint.integer("premium")
@@ -98,16 +119,65 @@ class TestMSSQLSchemaBuilder(unittest.TestCase):
             blueprint.text("description")
             blueprint.timestamps()
 
-        self.assertEqual(len(blueprint.table.added_columns), 12)
+        self.assertEqual(len(blueprint.table.added_columns), 15)
         self.assertEqual(
             blueprint.to_sql(),
             (
                 "CREATE TABLE [users] ([id] INT IDENTITY NOT NULL PRIMARY KEY, [gender] VARCHAR(255) NOT NULL CHECK([gender] IN ('male', 'female')), [name] VARCHAR(255) NOT NULL, [duration] VARCHAR(255) NOT NULL, "
-                "[url] VARCHAR(255) NOT NULL, [published_at] DATETIME NOT NULL, [thumbnail] VARCHAR(255) NULL, [premium] INT NOT NULL, "
+                "[url] VARCHAR(255) NOT NULL, [last_address] VARCHAR(255) NULL, [route_origin] VARCHAR(255) NULL, [mac_address] VARCHAR(255) NULL, [published_at] DATETIME NOT NULL, [thumbnail] VARCHAR(255) NULL, [premium] INT NOT NULL, "
                 "[author_id] INT NULL, [description] TEXT NOT NULL, [created_at] DATETIME NULL DEFAULT CURRENT_TIMESTAMP, "
                 "[updated_at] DATETIME NULL DEFAULT CURRENT_TIMESTAMP, "
-                "CONSTRAINT users_author_id_foreign FOREIGN KEY (author_id) REFERENCES users(id))"
+                "CONSTRAINT users_author_id_foreign FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE)"
             ),
+        )
+
+    def test_can_add_columns_with_foreign_key_constraint_name(self):
+        with self.schema.create("users") as blueprint:
+            blueprint.integer("profile_id")
+            blueprint.foreign("profile_id", name="profile_foreign").references("id").on(
+                "profiles"
+            )
+
+        self.assertEqual(len(blueprint.table.added_columns), 1)
+        self.assertEqual(
+            blueprint.to_sql(),
+            "CREATE TABLE [users] ("
+            "[profile_id] INT NOT NULL, "
+            "CONSTRAINT profile_foreign FOREIGN KEY (profile_id) REFERENCES profiles(id))",
+        )
+
+    def test_can_have_composite_keys(self):
+        with self.schema.create("users") as blueprint:
+            blueprint.string("name").unique()
+            blueprint.integer("age")
+            blueprint.integer("profile_id")
+            blueprint.primary(["name", "age"])
+
+        self.assertEqual(len(blueprint.table.added_columns), 3)
+        self.assertEqual(
+            blueprint.to_sql(),
+            "CREATE TABLE [users] "
+            "([name] VARCHAR(255) NOT NULL, "
+            "[age] INT NOT NULL, "
+            "[profile_id] INT NOT NULL, "
+            "CONSTRAINT users_name_unique UNIQUE (name), "
+            "CONSTRAINT users_name_age_primary PRIMARY KEY (name, age))",
+        )
+
+    def test_can_have_column_primary_key(self):
+        with self.schema.create("users") as blueprint:
+            blueprint.string("name").primary()
+            blueprint.integer("age")
+            blueprint.integer("profile_id")
+
+        self.assertEqual(len(blueprint.table.added_columns), 3)
+        self.assertEqual(
+            blueprint.to_sql(),
+            "CREATE TABLE [users] "
+            "([name] VARCHAR(255) NOT NULL, "
+            "[age] INT NOT NULL, "
+            "[profile_id] INT NOT NULL, "
+            "CONSTRAINT users_name_primary PRIMARY KEY (name))",
         )
 
     def test_has_table(self):

@@ -25,7 +25,7 @@ class ModelTest(Model):
 
 
 class BaseTestQueryBuilder:
-    def get_builder(self, table="users"):
+    def get_builder(self, table="users", dry=True):
         connection = MockConnectionFactory().make("postgres")
         return QueryBuilder(
             self.grammar,
@@ -33,6 +33,7 @@ class BaseTestQueryBuilder:
             connection="postgres",
             table=table,
             model=ModelTest(),
+            dry=dry,
         )
 
     def test_sum(self):
@@ -114,6 +115,22 @@ class BaseTestQueryBuilder:
     def test_select(self):
         builder = self.get_builder()
         builder.select("name", "email")
+        sql = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(builder.to_sql(), sql)
+
+    def test_add_select_no_table(self):
+        builder = self.get_builder(table=None)
+        sql = (
+            builder.add_select(
+                "other_test", lambda q: q.max("updated_at").table("different_table")
+            )
+            .add_select(
+                "some_alias", lambda q: q.max("updated_at").table("another_table")
+            )
+            .to_sql()
+        )
         sql = getattr(
             self, inspect.currentframe().f_code.co_name.replace("test_", "")
         )()
@@ -411,6 +428,22 @@ class BaseTestQueryBuilder:
             """SELECT "information_schema"."columns"."table_name" FROM "information_schema"."columns" WHERE "information_schema"."columns"."table_name" = 'users'""",
         )
 
+    def test_truncate(self):
+        builder = self.get_builder(dry=True)
+        sql = builder.truncate()
+        sql_ref = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(sql, sql_ref)
+
+    def test_truncate_without_foreign_keys(self):
+        builder = self.get_builder(dry=True)
+        sql = builder.truncate(foreign_keys=True)
+        sql_ref = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(sql, sql_ref)
+
 
 class PostgresQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
 
@@ -471,6 +504,17 @@ class PostgresQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
         builder.select('name', 'email')
         """
         return """SELECT "users"."name", "users"."email" FROM "users\""""
+
+    def add_select_no_table(self):
+        """
+        builder = self.get_builder()
+        builder.select('name', 'email')
+        """
+        return (
+            "SELECT "
+            '(SELECT MAX("different_table"."updated_at") AS updated_at FROM "different_table") AS other_test, '
+            '(SELECT MAX("another_table"."updated_at") AS updated_at FROM "another_table") AS some_alias'
+        )
 
     def select_raw(self):
         """
@@ -684,3 +728,17 @@ class PostgresQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
         builder.where("age", "not like", "%name%")
         """
         return """SELECT * FROM "users" WHERE "users"."age" NOT ILIKE '%name%'"""
+
+    def truncate(self):
+        """
+        builder = self.get_builder()
+        builder.truncate()
+        """
+        return """TRUNCATE TABLE "users\""""
+
+    def truncate_without_foreign_keys(self):
+        """
+        builder = self.get_builder()
+        builder.truncate()
+        """
+        return """TRUNCATE TABLE "users\""""

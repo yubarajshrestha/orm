@@ -1,6 +1,6 @@
 from .BaseRelationship import BaseRelationship
 from ..collection import Collection
-from inflection import singularize, underscore
+from inflection import singularize
 from ..models.Pivot import Pivot
 
 
@@ -36,6 +36,11 @@ class BelongsToMany(BaseRelationship):
         self.with_timestamps = with_timestamps
         self._as = attribute
         self.pivot_id = pivot_id
+
+    def set_keys(self, owner, attribute):
+        self.local_foreign_key = self.local_foreign_key or "id"
+        self.other_foreign_key = self.other_foreign_key or f"{attribute}_id"
+        return self
 
     def apply_query(self, query, owner):
         """Apply the query and return a dictionary to be hydrated

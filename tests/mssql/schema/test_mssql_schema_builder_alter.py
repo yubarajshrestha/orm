@@ -82,11 +82,25 @@ class TestMySQLSchemaBuilderAlter(unittest.TestCase):
     def test_alter_add_column_and_foreign_key(self):
         with self.schema.table("users") as blueprint:
             blueprint.unsigned_integer("playlist_id").nullable()
-            blueprint.foreign("playlist_id").references("id").on("playlists")
+            blueprint.foreign("playlist_id").references("id").on("playlists").on_delete(
+                "cascade"
+            )
 
         sql = [
             "ALTER TABLE [users] ADD [playlist_id] INT NULL",
-            "ALTER TABLE [users] ADD CONSTRAINT users_playlist_id_foreign FOREIGN KEY ([playlist_id]) REFERENCES playlists([id])",
+            "ALTER TABLE [users] ADD CONSTRAINT users_playlist_id_foreign FOREIGN KEY ([playlist_id]) REFERENCES playlists([id]) ON DELETE CASCADE",
+        ]
+
+        self.assertEqual(blueprint.to_sql(), sql)
+
+    def test_alter_add_column_and_add_foreign(self):
+        with self.schema.table("users") as blueprint:
+            blueprint.unsigned_integer("playlist_id").nullable()
+            blueprint.add_foreign("playlist_id.id.playlists").on_delete("cascade")
+
+        sql = [
+            "ALTER TABLE [users] ADD [playlist_id] INT NULL",
+            "ALTER TABLE [users] ADD CONSTRAINT users_playlist_id_foreign FOREIGN KEY ([playlist_id]) REFERENCES playlists([id]) ON DELETE CASCADE",
         ]
 
         self.assertEqual(blueprint.to_sql(), sql)
@@ -119,7 +133,7 @@ class TestMySQLSchemaBuilderAlter(unittest.TestCase):
         with self.schema.table("users") as blueprint:
             blueprint.index("playlist_id")
 
-        sql = ["CREATE INDEX users_playlist_id_index ON users(playlist_id)"]
+        sql = ["CREATE INDEX users_playlist_id_index ON [users](playlist_id)"]
 
         self.assertEqual(blueprint.to_sql(), sql)
 
@@ -165,8 +179,9 @@ class TestMySQLSchemaBuilderAlter(unittest.TestCase):
         with self.schema.table("users") as blueprint:
             blueprint.integer("age").change()
             blueprint.string("name")
+            blueprint.string("external_type").default("external")
 
-        self.assertEqual(len(blueprint.table.added_columns), 1)
+        self.assertEqual(len(blueprint.table.added_columns), 2)
         self.assertEqual(len(blueprint.table.changed_columns), 1)
         table = Table("users")
         table.add_column("age", "string")
@@ -174,7 +189,7 @@ class TestMySQLSchemaBuilderAlter(unittest.TestCase):
         blueprint.table.from_table = table
 
         sql = [
-            "ALTER TABLE [users] ADD [name] VARCHAR(255) NOT NULL",
+            "ALTER TABLE [users] ADD [name] VARCHAR(255) NOT NULL, [external_type] VARCHAR(255) NOT NULL DEFAULT 'external'",
             "ALTER TABLE [users] ALTER COLUMN [age] INT NOT NULL",
         ]
 
@@ -202,17 +217,25 @@ class TestMySQLSchemaBuilderAlter(unittest.TestCase):
 
         self.assertEqual(blueprint.to_sql(), sql)
 
-    # def test_alter_drop_on_table_schema_table(self):
-    #     schema = Schema(
-    #         connection=MSSQLConnection,
-    #         connection_details=DATABASES,
-    #     ).on("mssql")
+    def test_can_create_indexes(self):
+        with self.schema.table("users") as blueprint:
+            blueprint.index("name")
+            blueprint.index(["name", "email"])
+            blueprint.unique("name")
+            blueprint.unique(["name", "email"])
+            blueprint.fulltext("description")
 
-    #     with schema.table("table_schema") as blueprint:
-    #         blueprint.drop_column("name")
-
-    #     with schema.table("table_schema") as blueprint:
-    #         blueprint.string("name")
+        self.assertEqual(len(blueprint.table.added_columns), 0)
+        print(blueprint.to_sql())
+        self.assertEqual(
+            blueprint.to_sql(),
+            [
+                "CREATE INDEX users_name_index ON [users](name)",
+                "CREATE INDEX users_name_email_index ON [users](name,email)",
+                "ALTER TABLE [users] ADD CONSTRAINT users_name_unique UNIQUE(name)",
+                "ALTER TABLE [users] ADD CONSTRAINT users_name_email_unique UNIQUE(name,email)",
+            ],
+        )
 
     def test_timestamp_alter_add_nullable_column(self):
         with self.schema.table("users") as blueprint:

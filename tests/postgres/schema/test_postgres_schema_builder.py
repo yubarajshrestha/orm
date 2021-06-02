@@ -117,6 +117,9 @@ class TestPostgresSchemaBuilder(unittest.TestCase):
             blueprint.string("url")
             blueprint.string("option").default("ADMIN")
             blueprint.jsonb("payload")
+            blueprint.inet("last_address").nullable()
+            blueprint.cidr("route_origin").nullable()
+            blueprint.macaddr("mac_address").nullable()
             blueprint.datetime("published_at")
             blueprint.string("thumbnail").nullable()
             blueprint.integer("premium")
@@ -128,16 +131,16 @@ class TestPostgresSchemaBuilder(unittest.TestCase):
             blueprint.text("description")
             blueprint.timestamps()
 
-        self.assertEqual(len(blueprint.table.added_columns), 16)
+        self.assertEqual(len(blueprint.table.added_columns), 19)
         self.assertEqual(
             blueprint.to_sql(),
             (
                 """CREATE TABLE "users" (id BIGSERIAL UNIQUE NOT NULL PRIMARY KEY, name VARCHAR(255) NOT NULL, gender VARCHAR(255) CHECK(gender IN ('male', 'female')) NOT NULL, """
-                "duration VARCHAR(255) NOT NULL, money DECIMAL(17, 6) NOT NULL, url VARCHAR(255) NOT NULL, option VARCHAR(255) NOT NULL DEFAULT 'ADMIN', payload JSONB NOT NULL, published_at TIMESTAMP NOT NULL, "
-                "thumbnail VARCHAR(255) NULL, premium INTEGER NOT NULL, amount DOUBLE PRECISION NOT NULL DEFAULT 0.0, author_id INT NULL, "
-                "description TEXT NOT NULL, created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP, "
+                "duration VARCHAR(255) NOT NULL, money DECIMAL(17, 6) NOT NULL, url VARCHAR(255) NOT NULL, option VARCHAR(255) NOT NULL DEFAULT 'ADMIN', payload JSONB NOT NULL, last_address INET NULL, "
+                "route_origin CIDR NULL, mac_address MACADDR NULL, published_at TIMESTAMP NOT NULL, thumbnail VARCHAR(255) NULL, premium INTEGER NOT NULL, amount DOUBLE PRECISION NOT NULL DEFAULT 0.0, "
+                "author_id INT NULL, description TEXT NOT NULL, created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP, "
                 "updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP, "
-                "CONSTRAINT users_author_id_foreign FOREIGN KEY (author_id) REFERENCES authors(id))"
+                "CONSTRAINT users_author_id_foreign FOREIGN KEY (author_id) REFERENCES authors(id) ON DELETE CASCADE)"
             ),
         )
 
@@ -153,7 +156,56 @@ class TestPostgresSchemaBuilder(unittest.TestCase):
         self.assertEqual(len(table.table.added_columns), 3)
         self.assertEqual(
             table.to_sql(),
-            'CREATE TABLE "users" (id CHAR(36) NOT NULL PRIMARY KEY, name VARCHAR(255) NOT NULL, public_id CHAR(36) NULL)',
+            'CREATE TABLE "users" (id CHAR(36) NOT NULL, name VARCHAR(255) NOT NULL, public_id CHAR(36) NULL, CONSTRAINT users_id_primary PRIMARY KEY (id))',
+        )
+
+    def test_can_add_columns_with_foreign_key_constraint_name(self):
+        with self.schema.create("users") as blueprint:
+            blueprint.integer("profile_id")
+            blueprint.foreign("profile_id", name="profile_foreign").references("id").on(
+                "profiles"
+            )
+
+        self.assertEqual(len(blueprint.table.added_columns), 1)
+        self.assertEqual(
+            blueprint.to_sql(),
+            'CREATE TABLE "users" ('
+            "profile_id INTEGER NOT NULL, "
+            "CONSTRAINT profile_foreign FOREIGN KEY (profile_id) REFERENCES profiles(id))",
+        )
+
+    def test_can_have_composite_keys(self):
+        with self.schema.create("users") as blueprint:
+            blueprint.string("name").unique()
+            blueprint.integer("age")
+            blueprint.integer("profile_id")
+            blueprint.primary(["name", "age"])
+
+        self.assertEqual(len(blueprint.table.added_columns), 3)
+        self.assertEqual(
+            blueprint.to_sql(),
+            'CREATE TABLE "users" '
+            "(name VARCHAR(255) NOT NULL, "
+            "age INTEGER NOT NULL, "
+            "profile_id INTEGER NOT NULL, "
+            "CONSTRAINT users_name_unique UNIQUE (name), "
+            "CONSTRAINT users_name_age_primary PRIMARY KEY (name, age))",
+        )
+
+    def test_can_have_column_primary_key(self):
+        with self.schema.create("users") as blueprint:
+            blueprint.string("name").primary()
+            blueprint.integer("age")
+            blueprint.integer("profile_id")
+
+        self.assertEqual(len(blueprint.table.added_columns), 3)
+        self.assertEqual(
+            blueprint.to_sql(),
+            'CREATE TABLE "users" '
+            "(name VARCHAR(255) NOT NULL, "
+            "age INTEGER NOT NULL, "
+            "profile_id INTEGER NOT NULL, "
+            "CONSTRAINT users_name_primary PRIMARY KEY (name))",
         )
 
     def test_can_add_other_integer_types_column(self):
@@ -167,6 +219,15 @@ class TestPostgresSchemaBuilder(unittest.TestCase):
         self.assertEqual(
             table.to_sql(),
             'CREATE TABLE "integer_types" (tiny TINYINT NOT NULL, small SMALLINT NOT NULL, medium MEDIUMINT NOT NULL, big BIGINT NOT NULL)',
+        )
+
+    def test_can_add_binary_column(self):
+        with self.schema.create("binary_storing") as table:
+            table.binary("filecontent")
+
+        self.assertEqual(len(table.table.added_columns), 1)
+        self.assertEqual(
+            table.to_sql(), 'CREATE TABLE "binary_storing" (filecontent BYTEA NOT NULL)'
         )
 
     def test_can_enable_foreign_keys(self):

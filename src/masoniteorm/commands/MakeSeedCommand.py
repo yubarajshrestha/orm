@@ -1,11 +1,9 @@
-import datetime
 import os
 import pathlib
 
 from cleo import Command
 from inflection import camelize
 
-from ..migrations import Migration
 from inflection import underscore
 
 
@@ -15,6 +13,7 @@ class MakeSeedCommand(Command):
 
     seed
         {name : The name of the seed}
+        {--d|directory=databases/seeds : The location of the seed directory}
     """
 
     def handle(self):
@@ -22,7 +21,7 @@ class MakeSeedCommand(Command):
         # replace the placeholders of a stub file
         # output the content to a file location
         name = self.argument("name") + "TableSeeder"
-        seed_directory = "databases/seeds"
+        seed_directory = self.option("directory")
 
         file_name = underscore(name)
         stub_file = "create_seed"

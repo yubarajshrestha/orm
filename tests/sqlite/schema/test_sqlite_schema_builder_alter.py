@@ -8,6 +8,8 @@ from src.masoniteorm.schema.Table import Table
 
 
 class TestSQLiteSchemaBuilderAlter(unittest.TestCase):
+    maxDiff = None
+
     def setUp(self):
         self.schema = Schema(
             connection="dev",
@@ -19,12 +21,14 @@ class TestSQLiteSchemaBuilderAlter(unittest.TestCase):
     def test_can_add_columns(self):
         with self.schema.table("users") as blueprint:
             blueprint.string("name")
+            blueprint.string("external_type").default("external")
             blueprint.integer("age")
 
-        self.assertEqual(len(blueprint.table.added_columns), 2)
+        self.assertEqual(len(blueprint.table.added_columns), 3)
 
         sql = [
             "ALTER TABLE users ADD COLUMN name VARCHAR NOT NULL",
+            "ALTER TABLE users ADD COLUMN external_type VARCHAR NOT NULL DEFAULT 'external'",
             "ALTER TABLE users ADD COLUMN age INTEGER NOT NULL",
         ]
 
@@ -125,7 +129,9 @@ class TestSQLiteSchemaBuilderAlter(unittest.TestCase):
 
         blueprint.table.from_table = table
 
-        sql = ["ALTER TABLE users ADD COLUMN due_date TIMESTAMP NULL"]
+        sql = [
+            "ALTER TABLE users ADD COLUMN due_date TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"
+        ]
 
         self.assertEqual(blueprint.to_sql(), sql)
 
@@ -137,3 +143,51 @@ class TestSQLiteSchemaBuilderAlter(unittest.TestCase):
 
         with schema.table("table_schema") as blueprint:
             blueprint.string("name").nullable()
+
+    def test_alter_add_column_and_foreign_key(self):
+        with self.schema.table("users") as blueprint:
+            blueprint.unsigned_integer("playlist_id").nullable()
+            blueprint.foreign("playlist_id").references("id").on("playlists").on_delete(
+                "cascade"
+            ).on_update("SET NULL")
+
+        table = Table("users")
+        table.add_column("age", "string")
+        table.add_column("email", "string")
+
+        blueprint.table.from_table = table
+
+        sql = [
+            "ALTER TABLE users ADD COLUMN playlist_id UNSIGNED INT NULL REFERENCES playlists(id)",
+            "CREATE TEMPORARY TABLE __temp__users AS SELECT age, email FROM users",
+            "DROP TABLE users",
+            'CREATE TABLE "users" (age VARCHAR NOT NULL, email VARCHAR NOT NULL, playlist_id UNSIGNED INT NULL, '
+            "CONSTRAINT users_playlist_id_foreign FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE ON UPDATE SET NULL)",
+            'INSERT INTO "users" (age, email) SELECT age, email FROM __temp__users',
+            "DROP TABLE __temp__users",
+        ]
+
+        self.assertEqual(blueprint.to_sql(), sql)
+
+    def test_alter_add_foreign_key_only(self):
+        with self.schema.table("users") as blueprint:
+            blueprint.foreign("playlist_id").references("id").on("playlists").on_delete(
+                "cascade"
+            ).on_update("set null")
+
+        table = Table("users")
+        table.add_column("age", "string")
+        table.add_column("email", "string")
+
+        blueprint.table.from_table = table
+
+        sql = [
+            "CREATE TEMPORARY TABLE __temp__users AS SELECT age, email FROM users",
+            "DROP TABLE users",
+            'CREATE TABLE "users" (age VARCHAR NOT NULL, email VARCHAR NOT NULL, '
+            "CONSTRAINT users_playlist_id_foreign FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE ON UPDATE SET NULL)",
+            'INSERT INTO "users" (age, email) SELECT age, email FROM __temp__users',
+            "DROP TABLE __temp__users",
+        ]
+
+        self.assertEqual(blueprint.to_sql(), sql)

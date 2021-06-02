@@ -2,8 +2,6 @@ from ..query.grammars import SQLiteGrammar
 from .BaseConnection import BaseConnection
 from ..schema.platforms import SQLitePlatform
 from ..query.processors import SQLitePostProcessor
-import logging
-from .ConnectionResolver import ConnectionResolver
 from ..exceptions import QueryException
 
 
@@ -116,7 +114,7 @@ class SQLiteConnection(BaseConnection):
     def get_transaction_level(self):
         return self.transaction_level
 
-    def query(self, query, bindings, results="*", fetch_many=False):
+    def query(self, query, bindings=(), results="*"):
         """Make the actual query that will reach the database and come back with a result.
 
         Arguments:

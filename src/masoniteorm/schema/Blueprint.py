@@ -1,6 +1,3 @@
-from .Table import Table
-
-
 class Blueprint:
     """Used for building schemas for creating, modifying or altering schema."""
 
@@ -469,6 +466,57 @@ class Blueprint:
         self._last_column = self.table.add_column(column, "jsonb", nullable=nullable)
         return self
 
+    def inet(self, column, length=255, nullable=False):
+        """Sets a column to be the inet representation for the table.
+
+        Arguments:
+            column {string} -- The column name.
+
+        Keyword Arguments:
+            nullable {bool} -- Whether the column is nullable. (default: {False})
+
+        Returns:
+            self
+        """
+        self._last_column = self.table.add_column(
+            column, "inet", length=255, nullable=nullable
+        )
+        return self
+
+    def cidr(self, column, length=255, nullable=False):
+        """Sets a column to be the cidr representation for the table.
+
+        Arguments:
+            column {string} -- The column name.
+
+        Keyword Arguments:
+            nullable {bool} -- Whether the column is nullable. (default: {False})
+
+        Returns:
+            self
+        """
+        self._last_column = self.table.add_column(
+            column, "cidr", length=255, nullable=nullable
+        )
+        return self
+
+    def macaddr(self, column, length=255, nullable=False):
+        """Sets a column to be the macaddr representation for the table.
+
+        Arguments:
+            column {string} -- The column name.
+
+        Keyword Arguments:
+            nullable {bool} -- Whether the column is nullable. (default: {False})
+
+        Returns:
+            self
+        """
+        self._last_column = self.table.add_column(
+            column, "macaddr", length=255, nullable=nullable
+        )
+        return self
+
     def point(self, column, nullable=False):
         """Sets a column to be the point representation for the table.
 
@@ -628,7 +676,7 @@ class Blueprint:
     def soft_deletes(self, name="deleted_at"):
         return self.datetime(name, nullable=True).nullable()
 
-    def unique(self, column=None):
+    def unique(self, column=None, name=None):
         """Sets the last column to be unique if no column name is passed.
 
         If a column name is passed this method will create a new unique column.
@@ -639,17 +687,21 @@ class Blueprint:
         Returns:
             self
         """
-        if column is None:
-            self.table.add_constraint(
-                self._last_column.name, "unique", columns=[self._last_column.name]
-            )
-            return self
+        if not column:
+            column = self._last_column.name
 
-        self.table.add_constraint(column, "unique", columns=[column])
+        if not isinstance(column, list):
+            column = [column]
+
+        self.table.add_constraint(
+            name or f"{self.table.name}_{'_'.join(column)}_unique",
+            "unique",
+            columns=column,
+        )
 
         return self
 
-    def index(self, column):
+    def index(self, column=None, name=None):
         """Creates a constraint based on the index constraint representation of the table.
 
         Arguments:
@@ -658,10 +710,19 @@ class Blueprint:
         Returns:
             self
         """
-        self.table.add_index(column, f"{self.table.name}_{column}_index", "index")
+        if not column:
+            column = self._last_column.name
+
+        if not isinstance(column, list):
+            column = [column]
+
+        self.table.add_index(
+            column, name or f"{self.table.name}_{'_'.join(column)}_index", "index"
+        )
+
         return self
 
-    def fulltext(self, column):
+    def fulltext(self, column=None, name=None):
         """Creates a constraint based on the full text constraint representation of the table.
 
         Arguments:
@@ -670,10 +731,19 @@ class Blueprint:
         Returns:
             self
         """
-        self.table.add_constraint(column, "fulltext")
+        if not column:
+            column = self._last_column.name
+
+        if not isinstance(column, list):
+            column = [column]
+
+        self.table.add_constraint(
+            name or f"{'_'.join(column)}_fulltext", "fulltext", column
+        )
+
         return self
 
-    def primary(self, column=None):
+    def primary(self, column=None, name=None):
         """Creates a constraint based on the primary key constraint representation of the table.
         Sets the constraint on the last column if no column name is passed.
 
@@ -686,11 +756,32 @@ class Blueprint:
         if column is None:
             column = self._last_column.name
 
-        self.table.set_primary_key(column)
+        if not isinstance(column, list):
+            column = [column]
+
+        self.table.add_constraint(
+            name or f"{self.table.name}_{'_'.join(column)}_primary",
+            "primary_key",
+            columns=column,
+        )
 
         return self
 
-    def foreign(self, column):
+    def add_foreign(self, columns, name=None):
+        """Creates the foreign spliting the foreign name, reference column, and
+        reference table.
+
+        Arguments:
+            columns {string} -- The name of the from_column . to_column . table
+        """
+        if len(columns.split(".")) != 3:
+            raise Exception(
+                "Wrong add_foreign argument, the struncture is from_column.to_column.table"
+            )
+        from_column, to_column, table = columns.split(".")
+        return self.foreign(from_column, name=name).references(to_column).on(table)
+
+    def foreign(self, column, name=None):
         """Starts the creation of a foreign key constraint
 
         Arguments:
@@ -699,7 +790,9 @@ class Blueprint:
         Returns:
             self
         """
-        self._last_foreign = self.table.add_foreign_key(column)
+        self._last_foreign = self.table.add_foreign_key(
+            column, name=name or f"{self.table.name}_{column}_foreign"
+        )
         return self
 
     def references(self, column):

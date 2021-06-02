@@ -25,7 +25,9 @@ class ModelTest(Model):
 
 
 class TestMSSQLQueryBuilder(unittest.TestCase):
-    def get_builder(self, table="users"):
+    maxDiff = None
+
+    def get_builder(self, table="users", dry=True):
         connection = MockConnectionFactory().make("mssql")
         return QueryBuilder(
             # self.grammar,
@@ -33,6 +35,7 @@ class TestMSSQLQueryBuilder(unittest.TestCase):
             connection="mssql",
             table=table,
             model=ModelTest(),
+            dry=dry,
         )
 
     def test_sum(self):
@@ -107,6 +110,21 @@ class TestMSSQLQueryBuilder(unittest.TestCase):
 
         self.assertEqual(
             builder.to_sql(), "SELECT [users].[name], [users].[email] FROM [users]"
+        )
+
+    def test_add_select_no_table(self):
+        builder = self.get_builder(table=None)
+        builder.add_select(
+            "other_test", lambda q: q.max("updated_at").table("different_table")
+        ).add_select("some_alias", lambda q: q.max("updated_at").table("another_table"))
+
+        self.assertEqual(
+            builder.to_sql(),
+            (
+                "SELECT "
+                "(SELECT MAX([different_table].[updated_at]) AS updated_at FROM [different_table]) AS other_test, "
+                "(SELECT MAX([another_table].[updated_at]) AS updated_at FROM [another_table]) AS some_alias"
+            ),
         )
 
     def test_select_raw(self):
@@ -383,3 +401,13 @@ class TestMSSQLQueryBuilder(unittest.TestCase):
             sql,
             """SELECT [information_schema].[columns].[table_name] FROM [information_schema].[columns] WHERE [information_schema].[columns].[table_name] = 'users'""",
         )
+
+    def test_truncate(self):
+        builder = self.get_builder(dry=True)
+        sql = builder.truncate()
+        self.assertEqual(sql, "TRUNCATE TABLE [users]")
+
+    def test_truncate_without_foreign_keys(self):
+        builder = self.get_builder(dry=True)
+        sql = builder.truncate(foreign_keys=True)
+        self.assertEqual(sql, "TRUNCATE TABLE [users]")

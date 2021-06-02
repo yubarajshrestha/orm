@@ -33,6 +33,9 @@ class SQLitePlatform(Platform):
         "geometry": "GEOMETRY",
         "json": "JSON",
         "jsonb": "LONGBLOB",
+        "inet": "VARCHAR",
+        "cidr": "VARCHAR",
+        "macaddr": "VARCHAR",
         "long_text": "LONGTEXT",
         "point": "POINT",
         "time": "TIME",
@@ -81,7 +84,7 @@ class SQLitePlatform(Platform):
 
             if column.default in (0,):
                 default = f" DEFAULT {column.default}"
-            elif column.default in self.premapped_defaults:
+            elif column.default in self.premapped_defaults.keys():
                 default = self.premapped_defaults.get(column.default)
             elif column.default:
                 if isinstance(column.default, (str,)):
@@ -125,16 +128,39 @@ class SQLitePlatform(Platform):
 
         if diff.added_columns:
             for name, column in diff.added_columns.items():
+                default = ""
+                if column.default in (0,):
+                    default = f" DEFAULT {column.default}"
+                elif column.default in self.premapped_defaults.keys():
+                    default = self.premapped_defaults.get(column.default)
+                elif column.default:
+                    if isinstance(column.default, (str,)):
+                        default = f" DEFAULT '{column.default}'"
+                    else:
+                        default = f" DEFAULT {column.default}"
+                else:
+                    default = ""
+                constraint = ""
+                if column.name in diff.added_foreign_keys:
+                    foreign_key = diff.added_foreign_keys[column.name]
+                    constraint = f" REFERENCES {foreign_key.foreign_table}({foreign_key.foreign_column})"
+
                 sql.append(
-                    "ALTER TABLE {table} ADD COLUMN {name} {data_type} {nullable}".format(
+                    "ALTER TABLE {table} ADD COLUMN {name} {data_type} {nullable}{default}{constraint}".format(
                         table=diff.name,
                         name=column.name,
                         data_type=self.type_map.get(column.column_type, ""),
                         nullable="NULL" if column.is_null else "NOT NULL",
+                        default=default,
+                        constraint=constraint,
                     ).strip()
                 )
-
-        if diff.renamed_columns or diff.dropped_columns or diff.changed_columns:
+        if (
+            diff.renamed_columns
+            or diff.dropped_columns
+            or diff.changed_columns
+            or diff.added_foreign_keys
+        ):
             original_columns = diff.from_table.added_columns
             # pop off the dropped columns. No need for them here
             for column in diff.dropped_columns:
@@ -200,6 +226,18 @@ class SQLitePlatform(Platform):
                 )
             )
 
+        if diff.added_indexes:
+            for name, index in diff.added_indexes.items():
+                sql.append(
+                    f"CREATE INDEX {index.name} ON {self.wrap_table(diff.name)}({','.join(index.column)})"
+                )
+        if diff.added_constraints:
+            for name, constraint in diff.added_constraints.items():
+                if constraint.constraint_type == "unique":
+                    sql.append(
+                        f"CREATE UNIQUE INDEX {constraint.name} ON {self.wrap_table(diff.name)}({','.join(constraint.columns if isinstance(constraint.columns, list) else [constraint.columns])})"
+                    )
+
         return sql
 
     def create_format(self):
@@ -220,7 +258,10 @@ class SQLitePlatform(Platform):
         return "UNIQUE({columns})"
 
     def get_foreign_key_constraint_string(self):
-        return "CONSTRAINT {table}_{column}_foreign FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column})"
+        return "CONSTRAINT {constraint_name} FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column}){cascade}"
+
+    def get_primary_key_constraint_string(self):
+        return "CONSTRAINT {constraint_name} PRIMARY KEY ({columns})"
 
     def constraintize(self, constraints):
         sql = []
@@ -228,19 +269,29 @@ class SQLitePlatform(Platform):
             sql.append(
                 getattr(
                     self, f"get_{constraint.constraint_type}_constraint_string"
-                )().format(columns=", ".join(constraint.columns))
+                )().format(
+                    columns=", ".join(constraint.columns),
+                    constraint_name=constraint.name,
+                )
             )
         return sql
 
     def foreign_key_constraintize(self, table, foreign_keys):
         sql = []
         for name, foreign_key in foreign_keys.items():
+            cascade = ""
+            if foreign_key.delete_action:
+                cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key.delete_action.lower())}"
+            if foreign_key.update_action:
+                cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key.update_action.lower())}"
             sql.append(
                 self.get_foreign_key_constraint_string().format(
                     column=foreign_key.column,
+                    constraint_name=foreign_key.constraint_name,
                     table=table,
                     foreign_table=foreign_key.foreign_table,
                     foreign_column=foreign_key.foreign_column,
+                    cascade=cascade,
                 )
             )
         return sql
@@ -278,11 +329,11 @@ class SQLitePlatform(Platform):
 
     def compile_truncate(self, table, foreign_keys=False):
         if not foreign_keys:
-            return f"TRUNCATE {self.wrap_table(table)}"
+            return f"DELETE FROM {self.wrap_table(table)}"
 
         return [
             self.disable_foreign_key_constraints(),
-            f"TRUNCATE {self.wrap_table(table)}",
+            f"DELETE FROM {self.wrap_table(table)}",
             self.enable_foreign_key_constraints(),
         ]
 

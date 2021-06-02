@@ -1,3 +1,6 @@
+from contextlib import contextmanager
+
+
 class ConnectionResolver:
 
     _connection_details = {}
@@ -68,6 +71,21 @@ class ConnectionResolver:
         self.remove_global_connection(name)
         connection.rollback()
 
+    @contextmanager
+    def transaction(self, name=None):
+        self.begin_transaction(name)
+        try:
+            yield self
+        except Exception:
+            self.rollback(name)
+            raise
+
+        try:
+            self.commit(name)
+        except Exception:
+            self.rollback(name)
+            raise
+
     def get_connection_information(self, name):
         details = self.get_connection_details()
         return {
@@ -96,4 +114,4 @@ class ConnectionResolver:
         )
 
     def statement(self, query, bindings=(), connection="default"):
-        return self.get_query_builder().on(connection).raw(query, bindings)
+        return self.get_query_builder().on(connection).statement(query, bindings)

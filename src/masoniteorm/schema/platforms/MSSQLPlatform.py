@@ -33,6 +33,9 @@ class MSSQLPlatform(Platform):
         "geometry": "GEOMETRY",
         "json": "JSON",
         "jsonb": "LONGBLOB",
+        "inet": "VARCHAR",
+        "cidr": "VARCHAR",
+        "macaddr": "VARCHAR",
         "long_text": "LONGTEXT",
         "point": "POINT",
         "time": "TIME",
@@ -121,16 +124,23 @@ class MSSQLPlatform(Platform):
                 column,
                 foreign_key_constraint,
             ) in table.get_added_foreign_keys().items():
+                cascade = ""
+                if foreign_key_constraint.delete_action:
+                    cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key_constraint.delete_action.lower())}"
+                if foreign_key_constraint.update_action:
+                    cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key_constraint.update_action.lower())}"
                 sql.append(
                     f"ALTER TABLE {self.wrap_table(table.name)} ADD "
                     + self.get_foreign_key_constraint_string().format(
                         clean_column=column,
+                        constraint_name=foreign_key_constraint.constraint_name,
                         column=self.wrap_table(column),
                         table=table.name,
                         foreign_table=foreign_key_constraint.foreign_table,
                         foreign_column=self.wrap_table(
                             foreign_key_constraint.foreign_column
                         ),
+                        cascade=cascade,
                     )
                 )
 
@@ -145,7 +155,9 @@ class MSSQLPlatform(Platform):
             for name, index in table.added_indexes.items():
                 sql.append(
                     "CREATE INDEX {name} ON {table}({column})".format(
-                        name=index.name, table=table.name, column=index.column
+                        name=index.name,
+                        table=self.wrap_table(table.name),
+                        column=",".join(index.column),
                     )
                 )
 
@@ -156,6 +168,14 @@ class MSSQLPlatform(Platform):
                     f"DROP INDEX {self.wrap_table(table.name)}.{self.wrap_table(constraint)}"
                 )
 
+        if table.added_constraints:
+            for name, constraint in table.added_constraints.items():
+                if constraint.constraint_type == "unique":
+                    sql.append(
+                        f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT {constraint.name} UNIQUE({','.join(constraint.columns)})"
+                    )
+                elif constraint.constraint_type == "fulltext":
+                    pass
         return sql
 
     def add_column_string(self):
@@ -177,9 +197,10 @@ class MSSQLPlatform(Platform):
             else:
                 length = ""
 
+            default = ""
             if column.default in (0,):
                 default = f" DEFAULT {column.default}"
-            elif column.default in self.premapped_defaults:
+            elif column.default in self.premapped_defaults.keys():
                 default = self.premapped_defaults.get(column.default)
             elif column.default:
                 if isinstance(column.default, (str,)):
@@ -226,6 +247,7 @@ class MSSQLPlatform(Platform):
                 )().format(
                     columns=", ".join(constraint.columns),
                     name_columns="_".join(constraint.columns),
+                    constraint_name=constraint.name,
                     table=table.name,
                 )
             )
@@ -242,7 +264,10 @@ class MSSQLPlatform(Platform):
         return "ALTER TABLE {table} {columns}"
 
     def get_foreign_key_constraint_string(self):
-        return "CONSTRAINT {table}_{clean_column}_foreign FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column})"
+        return "CONSTRAINT {constraint_name} FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column}){cascade}"
+
+    def get_primary_key_constraint_string(self):
+        return "CONSTRAINT {constraint_name} PRIMARY KEY ({columns})"
 
     def get_unique_constraint_string(self):
         return "CONSTRAINT {table}_{name_columns}_unique UNIQUE ({columns})"
@@ -276,11 +301,9 @@ class MSSQLPlatform(Platform):
         return Table(table_name)
 
     def enable_foreign_key_constraints(self):
-        """Postgres does not allow a global way to enable foreign key constraints
-        """
+        """MSSQL does not allow a global way to enable foreign key constraints"""
         return ""
 
     def disable_foreign_key_constraints(self):
-        """Postgres does not allow a global way to disable foreign key constraints
-        """
+        """MSSQL does not allow a global way to disable foreign key constraints"""
         return ""

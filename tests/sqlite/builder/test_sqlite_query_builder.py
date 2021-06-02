@@ -15,6 +15,8 @@ class UserMock(Model):
 
 
 class BaseTestQueryBuilder:
+    maxDiff = None
+
     def get_builder(self, table="users"):
         connection = MockConnectionFactory().make("sqlite")
         return QueryBuilder(
@@ -163,6 +165,41 @@ class BaseTestQueryBuilder:
             .add_select("phone_count", lambda q: q.count("*").table("phones"))
             .add_select("salary", lambda q: q.count("*").table("salary"))
             .to_sql()
+        )
+        sql = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(builder.to_sql(), sql)
+
+    def test_add_select_no_table(self):
+        builder = self.get_builder(table=None)
+        sql = (
+            builder.add_select(
+                "other_test", lambda q: q.max("updated_at").table("different_table")
+            )
+            .add_select(
+                "some_alias", lambda q: q.max("updated_at").table("another_table")
+            )
+            .to_sql()
+        )
+        sql = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(builder.to_sql(), sql)
+
+    def test_add_select_with_raw(self):
+        builder = self.get_builder(table=None)
+        sql = (
+            builder.select_raw("max(updated_at) as test")
+            .from_("some_table")
+            .add_select(
+                "other_test",
+                lambda query: (
+                    query.max("updated_at")
+                    .from_("different_table")
+                    .where("some_id", "=", "3")
+                ),
+            )
         )
         sql = getattr(
             self, inspect.currentframe().f_code.co_name.replace("test_", "")
@@ -354,6 +391,13 @@ class BaseTestQueryBuilder:
         )()
         self.assertEqual(builder.to_sql(), sql)
 
+    def test_between_persisted(self):
+
+        builder = QueryBuilder().table("users").on("dev")
+        users = builder.between("age", 1, 2).count()
+
+        self.assertEqual(users, 2)
+
     def test_not_between(self):
         builder = self.get_builder()
         builder.not_between("id", 2, 5)
@@ -361,6 +405,13 @@ class BaseTestQueryBuilder:
             self, inspect.currentframe().f_code.co_name.replace("test_", "")
         )()
         self.assertEqual(builder.to_sql(), sql)
+
+    def test_not_between_persisted(self):
+
+        builder = QueryBuilder().table("users").on("dev")
+        users = builder.where_not_null("id").not_between("age", 1, 2).count()
+
+        self.assertEqual(users, 0)
 
     def test_where_in(self):
         builder = self.get_builder()
@@ -514,6 +565,22 @@ class BaseTestQueryBuilder:
         sql = builder.on("dev").statement("select * from users")
         self.assertTrue(sql)
 
+    def test_truncate(self):
+        builder = self.get_builder()
+        sql = builder.truncate()
+        sql_ref = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(sql, sql_ref)
+
+    def test_truncate_without_foreign_keys(self):
+        builder = self.get_builder()
+        sql = builder.truncate(foreign_keys=True)
+        sql_ref = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(sql, sql_ref)
+
 
 class SQLiteQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
 
@@ -594,7 +661,42 @@ class SQLiteQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
         builder = self.get_builder()
         builder.select('name', 'email')
         """
-        return """SELECT "users"."name", (SELECT COUNT(*) AS m_count_reserved FROM "phones") as phone_count, (SELECT COUNT(*) AS m_count_reserved FROM "salary") as salary FROM "users\""""
+        return """SELECT "users"."name", (SELECT COUNT(*) AS m_count_reserved FROM "phones") AS phone_count, (SELECT COUNT(*) AS m_count_reserved FROM "salary") AS salary FROM "users\""""
+
+    def add_select_no_table(self):
+        """
+        builder = self.get_builder()
+        builder.select('name', 'email')
+        """
+        return (
+            "SELECT "
+            '(SELECT MAX("different_table"."updated_at") AS updated_at FROM "different_table") AS other_test, '
+            '(SELECT MAX("another_table"."updated_at") AS updated_at FROM "another_table") AS some_alias'
+        )
+
+    def add_select_with_raw(self):
+        """
+        builder
+            .select_raw("max(updated_at) as test").from_("some_table")
+            .add_select(
+            "other_test",
+            lambda query: (
+                query.max("updated_at")
+                    .from_("different_table")
+                    .where(
+                    "some_id", "=",
+                    "3"
+                )
+            ),
+        )
+        """
+        return (
+            "SELECT max(updated_at) as test, "
+            '(SELECT MAX("different_table"."updated_at") AS updated_at '
+            'FROM "different_table" '
+            'WHERE "different_table"."some_id" = \'3\') AS other_test '
+            'FROM "some_table"'
+        )
 
     def select_raw(self):
         """
@@ -851,3 +953,21 @@ class SQLiteQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
         builder = self.get_builder()
         sql = builder.when(17 > 18, lambda q: q.where("age_restricted", 1)).to_sql()
         return self.assertEqual(sql, """SELECT * FROM "users\"""")
+
+    def truncate(self):
+        """
+        builder = self.get_builder()
+        builder.truncate()
+        """
+        return """DELETE FROM "users\""""
+
+    def truncate_without_foreign_keys(self):
+        """
+        builder = self.get_builder()
+        builder.truncate(foreign_keys=True)
+        """
+        return [
+            "PRAGMA foreign_keys = OFF",
+            'DELETE FROM "users"',
+            "PRAGMA foreign_keys = ON",
+        ]

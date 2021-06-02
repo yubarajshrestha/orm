@@ -72,14 +72,36 @@ class TestPostgresSchemaBuilderAlter(unittest.TestCase):
     def test_alter_add_column_and_foreign_key(self):
         with self.schema.table("users") as blueprint:
             blueprint.unsigned_integer("playlist_id").nullable()
-            blueprint.foreign("playlist_id").references("id").on("playlists")
+            blueprint.foreign("playlist_id").references("id").on("playlists").on_delete(
+                "cascade"
+            )
 
         sql = [
             'ALTER TABLE "users" ADD COLUMN playlist_id INT NULL',
-            'ALTER TABLE "users" ADD CONSTRAINT users_playlist_id_foreign FOREIGN KEY (playlist_id) REFERENCES playlists(id)',
+            'ALTER TABLE "users" ADD CONSTRAINT users_playlist_id_foreign FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE',
         ]
 
         self.assertEqual(blueprint.to_sql(), sql)
+
+    def test_can_create_indexes(self):
+        with self.schema.table("users") as blueprint:
+            blueprint.index("name")
+            blueprint.index(["name", "email"])
+            blueprint.unique("name")
+            blueprint.unique(["name", "email"])
+            blueprint.fulltext("description")
+
+        self.assertEqual(len(blueprint.table.added_columns), 0)
+        print(blueprint.to_sql())
+        self.assertEqual(
+            blueprint.to_sql(),
+            [
+                'CREATE INDEX users_name_index ON "users"(name)',
+                'CREATE INDEX users_name_email_index ON "users"(name,email)',
+                'ALTER TABLE "users" ADD CONSTRAINT users_name_unique UNIQUE(name)',
+                'ALTER TABLE "users" ADD CONSTRAINT users_name_email_unique UNIQUE(name,email)',
+            ],
+        )
 
     def test_alter_drop_foreign_key(self):
         with self.schema.table("users") as blueprint:
@@ -109,7 +131,7 @@ class TestPostgresSchemaBuilderAlter(unittest.TestCase):
         with self.schema.table("users") as blueprint:
             blueprint.index("playlist_id")
 
-        sql = ["CREATE INDEX users_playlist_id_index ON users(playlist_id)"]
+        sql = ['CREATE INDEX users_playlist_id_index ON "users"(playlist_id)']
 
         self.assertEqual(blueprint.to_sql(), sql)
 
@@ -174,9 +196,10 @@ class TestPostgresSchemaBuilderAlter(unittest.TestCase):
         with self.schema.table("users") as blueprint:
             blueprint.integer("age").default(0).nullable().change()
             blueprint.string("name")
+            blueprint.string("external_type").default("external")
             blueprint.drop_column("email")
 
-        self.assertEqual(len(blueprint.table.added_columns), 1)
+        self.assertEqual(len(blueprint.table.added_columns), 2)
         self.assertEqual(len(blueprint.table.changed_columns), 1)
         table = Table("users")
         table.add_column("age", "string")
@@ -185,7 +208,7 @@ class TestPostgresSchemaBuilderAlter(unittest.TestCase):
         blueprint.table.from_table = table
 
         sql = [
-            'ALTER TABLE "users" ADD COLUMN name VARCHAR(255) NOT NULL',
+            """ALTER TABLE "users" ADD COLUMN name VARCHAR(255) NOT NULL, ADD COLUMN external_type VARCHAR(255) NOT NULL DEFAULT 'external'""",
             'ALTER TABLE "users" DROP COLUMN email',
             'ALTER TABLE "users" ALTER COLUMN age TYPE INTEGER, ALTER COLUMN age DROP NOT NULL, ALTER COLUMN age SET DEFAULT 0',
         ]
@@ -203,7 +226,9 @@ class TestPostgresSchemaBuilderAlter(unittest.TestCase):
 
         blueprint.table.from_table = table
 
-        sql = ['ALTER TABLE "users" ADD COLUMN due_date TIMESTAMP NULL']
+        sql = [
+            'ALTER TABLE "users" ADD COLUMN due_date TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP'
+        ]
 
         self.assertEqual(blueprint.to_sql(), sql)
 

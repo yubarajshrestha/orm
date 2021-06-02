@@ -23,7 +23,9 @@ class User(Model):
 
 
 class BaseTestQueryBuilder:
-    def get_builder(self, table="users"):
+    maxDiff = None
+
+    def get_builder(self, table="users", dry=True):
         connection = MockConnectionFactory().make("default")
         return QueryBuilder(
             grammar=self.grammar,
@@ -31,12 +33,22 @@ class BaseTestQueryBuilder:
             connection="mysql",
             table=table,
             model=User(),
+            dry=dry,
             connection_details=DATABASES,
         )
 
     def test_sum(self):
         builder = self.get_builder()
         builder.sum("age")
+
+        sql = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(builder.to_sql(), sql)
+
+    def test_sum_chained(self):
+        builder = self.get_builder()
+        builder.sum("age").max("salary")
 
         sql = getattr(
             self, inspect.currentframe().f_code.co_name.replace("test_", "")
@@ -135,6 +147,14 @@ class BaseTestQueryBuilder:
         )()
         self.assertEqual(builder.to_sql(), sql)
 
+    def test_select_with_table_raw(self):
+        builder = self.get_builder()
+        builder.select("users.*").from_raw("orders, customers")
+        sql = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(builder.to_sql(), sql)
+
     def test_select_with_alias(self):
         builder = self.get_builder()
         builder.select("users.username as name")
@@ -157,6 +177,22 @@ class BaseTestQueryBuilder:
             builder.select("name")
             .add_select("phone_count", lambda q: q.count("*").table("phones"))
             .add_select("salary", lambda q: q.count("*").table("salary"))
+            .to_sql()
+        )
+        sql = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(builder.to_sql(), sql)
+
+    def test_add_select_no_table(self):
+        builder = self.get_builder(table=None)
+        sql = (
+            builder.add_select(
+                "other_test", lambda q: q.max("updated_at").table("different_table")
+            )
+            .add_select(
+                "some_alias", lambda q: q.max("updated_at").table("another_table")
+            )
             .to_sql()
         )
         sql = getattr(
@@ -480,6 +516,22 @@ class BaseTestQueryBuilder:
             """SELECT `information_schema`.`columns`.`table_name` FROM `information_schema`.`columns` WHERE `information_schema`.`columns`.`table_name` = 'users'""",
         )
 
+    def test_truncate(self):
+        builder = self.get_builder(dry=True)
+        sql = builder.truncate()
+        sql_ref = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(sql, sql_ref)
+
+    def test_truncate_without_foreign_keys(self):
+        builder = self.get_builder(dry=True)
+        sql = builder.truncate(foreign_keys=True)
+        sql_ref = getattr(
+            self, inspect.currentframe().f_code.co_name.replace("test_", "")
+        )()
+        self.assertEqual(sql, sql_ref)
+
 
 class MySQLQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
     grammar = MySQLGrammar
@@ -490,6 +542,13 @@ class MySQLQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
         builder.sum('age')
         """
         return "SELECT SUM(`users`.`age`) AS age FROM `users`"
+
+    def sum_chained(self):
+        """
+        builder = self.get_builder()
+        builder.sum('age')
+        """
+        return "SELECT SUM(`users`.`age`) AS age, MAX(`users`.`salary`) AS salary FROM `users`"
 
     def with_(self):
         """
@@ -554,6 +613,13 @@ class MySQLQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
         """
         return "SELECT `users`.* FROM `users`"
 
+    def select_with_table_raw(self):
+        """
+        builder = self.get_builder()
+        builder.select('users.*')
+        """
+        return "SELECT `users`.* FROM orders, customers"
+
     def select_with_alias(self):
         """
         builder = self.get_builder()
@@ -573,7 +639,18 @@ class MySQLQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
         builder = self.get_builder()
         builder.select('name', 'email')
         """
-        return "SELECT `users`.`name`, (SELECT COUNT(*) AS m_count_reserved FROM `phones`) as phone_count, (SELECT COUNT(*) AS m_count_reserved FROM `salary`) as salary FROM `users`"
+        return "SELECT `users`.`name`, (SELECT COUNT(*) AS m_count_reserved FROM `phones`) AS phone_count, (SELECT COUNT(*) AS m_count_reserved FROM `salary`) AS salary FROM `users`"
+
+    def add_select_no_table(self):
+        """
+        builder = self.get_builder()
+        builder.select('name', 'email')
+        """
+        return (
+            "SELECT "
+            "(SELECT MAX(`different_table`.`updated_at`) AS updated_at FROM `different_table`) AS other_test, "
+            "(SELECT MAX(`another_table`.`updated_at`) AS updated_at FROM `another_table`) AS some_alias"
+        )
 
     def create(self):
         """
@@ -782,3 +859,21 @@ class MySQLQueryBuilderTest(BaseTestQueryBuilder, unittest.TestCase):
         builder.where("age", "not like", "%name%")
         """
         return "SELECT * FROM `users` WHERE `users`.`age` NOT LIKE '%name%'"
+
+    def truncate(self):
+        """
+        builder = self.get_builder()
+        builder.truncate()
+        """
+        return """TRUNCATE TABLE `users`"""
+
+    def truncate_without_foreign_keys(self):
+        """
+        builder = self.get_builder()
+        builder.truncate()
+        """
+        return [
+            "SET FOREIGN_KEY_CHECKS=0",
+            "TRUNCATE TABLE `users`",
+            "SET FOREIGN_KEY_CHECKS=1",
+        ]

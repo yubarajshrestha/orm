@@ -9,6 +9,9 @@ class PostgresPlatform(Platform):
         "tiny_integer",
         "small_integer",
         "medium_integer",
+        "inet",
+        "cidr",
+        "macaddr",
     ]
 
     type_map = {
@@ -22,7 +25,7 @@ class PostgresPlatform(Platform):
         "medium_integer": "MEDIUMINT",
         "increments": "SERIAL UNIQUE",
         "uuid": "CHAR",
-        "binary": "LONGBLOB",
+        "binary": "BYTEA",
         "boolean": "BOOLEAN",
         "decimal": "DECIMAL",
         "double": "DOUBLE PRECISION",
@@ -32,6 +35,9 @@ class PostgresPlatform(Platform):
         "geometry": "GEOMETRY",
         "json": "JSON",
         "jsonb": "JSONB",
+        "inet": "INET",
+        "cidr": "CIDR",
+        "macaddr": "MACADDR",
         "long_text": "LONGTEXT",
         "point": "POINT",
         "time": "TIME",
@@ -88,7 +94,7 @@ class PostgresPlatform(Platform):
 
             if column.default in (0,):
                 default = f" DEFAULT {column.default}"
-            elif column.default in self.premapped_defaults:
+            elif column.default in self.premapped_defaults.keys():
                 default = self.premapped_defaults.get(column.default)
             elif column.default:
                 if isinstance(column.default, (str,)):
@@ -136,6 +142,20 @@ class PostgresPlatform(Platform):
                     )
                 else:
                     length = ""
+
+                default = ""
+                if column.default in (0,):
+                    default = f" DEFAULT {column.default}"
+                elif column.default in self.premapped_defaults.keys():
+                    default = self.premapped_defaults.get(column.default)
+                elif column.default:
+                    if isinstance(column.default, (str,)):
+                        default = f" DEFAULT '{column.default}'"
+                    else:
+                        default = f" DEFAULT {column.default}"
+                else:
+                    default = ""
+
                 add_columns.append(
                     self.add_column_string()
                     .format(
@@ -144,6 +164,7 @@ class PostgresPlatform(Platform):
                         length=length,
                         constraint="PRIMARY KEY" if column.primary else "",
                         nullable="NULL" if column.is_null else "NOT NULL",
+                        default=default,
                     )
                     .strip()
                 )
@@ -218,19 +239,25 @@ class PostgresPlatform(Platform):
                     table=self.wrap_table(table.name), columns=", ".join(changed_sql)
                 )
             )
-
         if table.added_foreign_keys:
             for (
                 column,
                 foreign_key_constraint,
             ) in table.get_added_foreign_keys().items():
+                cascade = ""
+                if foreign_key_constraint.delete_action:
+                    cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key_constraint.delete_action.lower())}"
+                if foreign_key_constraint.update_action:
+                    cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key_constraint.update_action.lower())}"
                 sql.append(
                     f"ALTER TABLE {self.wrap_table(table.name)} ADD "
                     + self.get_foreign_key_constraint_string().format(
                         column=column,
+                        constraint_name=foreign_key_constraint.constraint_name,
                         table=table.name,
                         foreign_table=foreign_key_constraint.foreign_table,
                         foreign_column=foreign_key_constraint.foreign_column,
+                        cascade=cascade,
                     )
                 )
 
@@ -246,9 +273,18 @@ class PostgresPlatform(Platform):
             for name, index in table.added_indexes.items():
                 sql.append(
                     "CREATE INDEX {name} ON {table}({column})".format(
-                        name=index.name, table=table.name, column=index.column
+                        name=index.name,
+                        table=self.wrap_table(table.name),
+                        column=",".join(index.column),
                     )
                 )
+
+        if table.added_constraints:
+            for name, constraint in table.added_constraints.items():
+                if constraint.constraint_type == "unique":
+                    sql.append(
+                        f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT {constraint.name} UNIQUE({','.join(constraint.columns)})"
+                    )
 
         return sql
 
@@ -259,7 +295,7 @@ class PostgresPlatform(Platform):
         return "ALTER TABLE {table} {columns}"
 
     def add_column_string(self):
-        return "ADD COLUMN {name} {data_type}{length} {nullable} {constraint}"
+        return "ADD COLUMN {name} {data_type}{length} {nullable}{default} {constraint}"
 
     def drop_column_string(self):
         return "DROP COLUMN {name}"
@@ -282,6 +318,7 @@ class PostgresPlatform(Platform):
                 )().format(
                     columns=", ".join(constraint.columns),
                     name_columns="_".join(constraint.columns),
+                    constraint_name=constraint.name,
                     table=table.name,
                 )
             )
@@ -291,7 +328,10 @@ class PostgresPlatform(Platform):
         return "CREATE TABLE {table} ({columns}{constraints}{foreign_keys})"
 
     def get_foreign_key_constraint_string(self):
-        return "CONSTRAINT {table}_{column}_foreign FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column})"
+        return "CONSTRAINT {constraint_name} FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column}){cascade}"
+
+    def get_primary_key_constraint_string(self):
+        return "CONSTRAINT {constraint_name} PRIMARY KEY ({columns})"
 
     def get_unique_constraint_string(self):
         return "CONSTRAINT {table}_{name_columns}_unique UNIQUE ({columns})"
@@ -348,11 +388,9 @@ class PostgresPlatform(Platform):
         return table
 
     def enable_foreign_key_constraints(self):
-        """Postgres does not allow a global way to enable foreign key constraints
-        """
+        """Postgres does not allow a global way to enable foreign key constraints"""
         return ""
 
     def disable_foreign_key_constraints(self):
-        """Postgres does not allow a global way to disable foreign key constraints
-        """
+        """Postgres does not allow a global way to disable foreign key constraints"""
         return ""

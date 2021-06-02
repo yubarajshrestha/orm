@@ -1,6 +1,3 @@
-from ..collection.Collection import Collection
-
-
 class BaseRelationship:
     def __init__(self, fn, local_key=None, foreign_key=None):
         if isinstance(fn, str):
@@ -52,7 +49,7 @@ class BaseRelationship:
         """
         attribute = self.fn.__name__
         relationship = self.fn(self)()
-
+        self.set_keys(instance, attribute)
         self._related_builder = relationship.builder
 
         if instance.is_loaded():

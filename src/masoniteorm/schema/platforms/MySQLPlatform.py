@@ -26,6 +26,9 @@ class MySQLPlatform(Platform):
         "geometry": "GEOMETRY",
         "json": "JSON",
         "jsonb": "LONGBLOB",
+        "inet": "VARCHAR",
+        "cidr": "VARCHAR",
+        "macaddr": "VARCHAR",
         "long_text": "LONGTEXT",
         "point": "POINT",
         "time": "TIME",
@@ -58,7 +61,7 @@ class MySQLPlatform(Platform):
 
             if column.default in (0,):
                 default = f" DEFAULT {column.default}"
-            elif column.default in self.premapped_defaults:
+            elif column.default in self.premapped_defaults.keys():
                 default = self.premapped_defaults.get(column.default)
             elif column.default:
                 if isinstance(column.default, (str,)):
@@ -129,6 +132,19 @@ class MySQLPlatform(Platform):
                 else:
                     length = ""
 
+                default = ""
+                if column.default in (0,):
+                    default = f" DEFAULT {column.default}"
+                elif column.default in self.premapped_defaults.keys():
+                    default = self.premapped_defaults.get(column.default)
+                elif column.default:
+                    if isinstance(column.default, (str,)):
+                        default = f" DEFAULT '{column.default}'"
+                    else:
+                        default = f" DEFAULT {column.default}"
+                else:
+                    default = ""
+
                 add_columns.append(
                     self.add_column_string()
                     .format(
@@ -137,6 +153,7 @@ class MySQLPlatform(Platform):
                         length=length,
                         constraint="PRIMARY KEY" if column.primary else "",
                         nullable="NULL" if column.is_null else "NOT NULL",
+                        default=default,
                     )
                     .strip()
                 )
@@ -206,13 +223,20 @@ class MySQLPlatform(Platform):
                 column,
                 foreign_key_constraint,
             ) in table.get_added_foreign_keys().items():
+                cascade = ""
+                if foreign_key_constraint.delete_action:
+                    cascade += f" ON DELETE {self.foreign_key_actions.get(foreign_key_constraint.delete_action.lower())}"
+                if foreign_key_constraint.update_action:
+                    cascade += f" ON UPDATE {self.foreign_key_actions.get(foreign_key_constraint.update_action.lower())}"
                 sql.append(
                     f"ALTER TABLE {self.wrap_table(table.name)} ADD "
                     + self.get_foreign_key_constraint_string().format(
                         column=column,
+                        constraint_name=foreign_key_constraint.constraint_name,
                         table=table.name,
                         foreign_table=foreign_key_constraint.foreign_table,
                         foreign_column=foreign_key_constraint.foreign_column,
+                        cascade=cascade,
                     )
                 )
 
@@ -227,9 +251,22 @@ class MySQLPlatform(Platform):
             for name, index in table.added_indexes.items():
                 sql.append(
                     "CREATE INDEX {name} ON {table}({column})".format(
-                        name=index.name, table=table.name, column=index.column
+                        name=index.name,
+                        table=self.wrap_table(table.name),
+                        column=",".join(index.column),
                     )
                 )
+
+        if table.added_constraints:
+            for name, constraint in table.added_constraints.items():
+                if constraint.constraint_type == "unique":
+                    sql.append(
+                        f"ALTER TABLE {self.wrap_table(table.name)} ADD CONSTRAINT UNIQUE INDEX {constraint.name}({','.join(constraint.columns)})"
+                    )
+                elif constraint.constraint_type == "fulltext":
+                    sql.append(
+                        f"ALTER TABLE {self.wrap_table(table.name)} ADD FULLTEXT {constraint.name}({','.join(constraint.columns)})"
+                    )
 
         if table.removed_indexes:
             constraints = table.removed_indexes
@@ -241,7 +278,7 @@ class MySQLPlatform(Platform):
         return sql
 
     def add_column_string(self):
-        return "ADD {name} {data_type}{length} {nullable}"
+        return "ADD {name} {data_type}{length} {nullable}{default}"
 
     def drop_column_string(self):
         return "DROP COLUMN {name}"
@@ -265,6 +302,7 @@ class MySQLPlatform(Platform):
                     columns=", ".join(constraint.columns),
                     name_columns="_".join(constraint.columns),
                     table=table.name,
+                    constraint_name=constraint.name,
                 )
             )
 
@@ -283,7 +321,10 @@ class MySQLPlatform(Platform):
         return "ALTER TABLE {table} {columns}"
 
     def get_foreign_key_constraint_string(self):
-        return "CONSTRAINT {table}_{column}_foreign FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column})"
+        return "CONSTRAINT {constraint_name} FOREIGN KEY ({column}) REFERENCES {foreign_table}({foreign_column}){cascade}"
+
+    def get_primary_key_constraint_string(self):
+        return "CONSTRAINT {constraint_name} PRIMARY KEY ({columns})"
 
     def get_unique_constraint_string(self):
         return "CONSTRAINT {table}_{name_columns}_unique UNIQUE ({columns})"

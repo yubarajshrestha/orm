@@ -1,5 +1,5 @@
 import os
-from os import listdir, path
+from os import listdir
 from os.path import isfile, join
 from pydoc import locate
 
@@ -7,12 +7,8 @@ from inflection import camelize
 
 from ..models.MigrationModel import MigrationModel
 from ..schema import Schema
-from ..connections import ConnectionFactory
 
-from pprint import pprint
 from timeit import default_timer as timer
-
-from ..exceptions import MigrationNotFound
 
 
 class Migration:
@@ -127,7 +123,7 @@ class Migration:
                 )
             except TypeError:
                 self.command_class.line(f"<error>Not Found: {migration}</error>")
-                raise MigrationNotFound(f"Could not find {migration}")
+                continue
 
             self.last_migrations_ran.append(migration)
             if self.command_class:
@@ -176,8 +172,7 @@ class Migration:
                 migration_class = self.locate(migration)(connection=self.connection)
             except TypeError:
                 self.command_class.line(f"<error>Not Found: {migration}</error>")
-
-                raise MigrationNotFound(f"Could not find {migration}")
+                continue
 
             if output:
                 migration_class.schema.dry()
@@ -232,8 +227,9 @@ class Migration:
                 self.locate(migration)(connection=self.connection).down()
             except TypeError:
                 self.command_class.line(f"<error>Not Found: {migration}</error>")
+                continue
 
-                raise MigrationNotFound(f"Could not find {migration}")
+                # raise MigrationNotFound(f"Could not find {migration}")
 
             self.delete_migration(migration)
 

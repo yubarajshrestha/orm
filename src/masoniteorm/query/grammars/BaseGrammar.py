@@ -72,22 +72,40 @@ class BaseGrammar:
         Returns:
             [type] -- [description]
         """
-        self._sql = (
-            self.select_format()
-            .format(
-                columns=self.process_columns(separator=", "),
-                table=self.process_table(self.table),
-                wheres=self.process_wheres(qmark=qmark),
-                limit=self.process_limit(),
-                offset=self.process_offset(),
-                aggregates=self.process_aggregates(),
-                order_by=self.process_order_by(),
-                group_by=self.process_group_by(),
-                joins=self.process_joins(),
-                having=self.process_having(),
+        if not self.table:
+            self._sql = (
+                self.select_no_table()
+                .format(
+                    columns=self.process_columns(separator=", ", qmark=qmark),
+                    table=self.process_table(self.table),
+                    wheres=self.process_wheres(qmark=qmark),
+                    limit=self.process_limit(),
+                    offset=self.process_offset(),
+                    aggregates=self.process_aggregates(),
+                    order_by=self.process_order_by(),
+                    group_by=self.process_group_by(),
+                    joins=self.process_joins(),
+                    having=self.process_having(),
+                )
+                .strip()
             )
-            .strip()
-        )
+        else:
+            self._sql = (
+                self.select_format()
+                .format(
+                    columns=self.process_columns(separator=", ", qmark=qmark),
+                    table=self.process_table(self.table),
+                    wheres=self.process_wheres(qmark=qmark),
+                    limit=self.process_limit(),
+                    offset=self.process_offset(),
+                    aggregates=self.process_aggregates(),
+                    order_by=self.process_order_by(),
+                    group_by=self.process_group_by(),
+                    joins=self.process_joins(),
+                    having=self.process_having(),
+                )
+                .strip()
+            )
 
         return self
 
@@ -117,7 +135,7 @@ class BaseGrammar:
         self._sql = self.insert_format().format(
             key_equals=self._compile_key_value_equals(qmark=qmark),
             table=self.process_table(self.table),
-            columns=self.process_columns(separator=", ", action="insert"),
+            columns=self.process_columns(separator=", ", action="insert", qmark=qmark),
             values=self.process_values(separator=", ", qmark=qmark),
         )
 
@@ -299,10 +317,13 @@ class BaseGrammar:
             else:
                 aggregate_string = self.aggregate_string_with_alias()
 
-            sql += aggregate_string.format(
-                aggregate_function=aggregate_function,
-                column="*" if column == "*" else self._table_column_string(column),
-                alias=self.process_alias(aggregates.alias or column),
+            sql += (
+                aggregate_string.format(
+                    aggregate_function=aggregate_function,
+                    column="*" if column == "*" else self._table_column_string(column),
+                    alias=self.process_alias(aggregates.alias or column),
+                )
+                + ", "
             )
 
         return sql
@@ -390,13 +411,29 @@ class BaseGrammar:
         Returns:
             self
         """
+        if not table:
+            return ""
+
+        if isinstance(table, str):
+            return ".".join(
+                self.table_string().format(
+                    table=t,
+                    database=self._connection_details.get("database", ""),
+                    prefix=self._connection_details.get("prefix", ""),
+                )
+                for t in table.split(".")
+            )
+
+        if table.raw:
+            return table.name
+
         return ".".join(
             self.table_string().format(
                 table=t,
                 database=self._connection_details.get("database", ""),
                 prefix=self._connection_details.get("prefix", ""),
             )
-            for t in table.split(".")
+            for t in table.name.split(".")
         )
 
     def process_limit(self):
@@ -478,7 +515,7 @@ class BaseGrammar:
                     keyword = ""
                 else:
                     keyword = " " + self.first_where_string()
-            elif where.keyword == "or":
+            elif hasattr(where, "keyword") and where.keyword == "or":
                 keyword = " " + self.or_where_string()
             else:
                 keyword = " " + self.additional_where_string()
@@ -509,9 +546,17 @@ class BaseGrammar:
             If it is a WHERE NULL, WHERE EXISTS, WHERE `col` = 'val' etc
             """
             if equality == "BETWEEN":
+                low = where.low
+                high = where.high
+                if qmark:
+                    self.add_binding(low)
+                    self.add_binding(high)
+                    low = "?"
+                    high = "?"
+
                 sql_string = self.between_string().format(
-                    low=self._compile_value(where.low),
-                    high=self._compile_value(where.high),
+                    low=self._compile_value(low),
+                    high=self._compile_value(high),
                     column=self._table_column_string(where.column),
                     keyword=keyword,
                 )
@@ -542,16 +587,27 @@ class BaseGrammar:
             """If the value should actually be a sub query then we need to wrap it in a query here
             """
             if isinstance(value, SubGroupExpression):
-                query_value = self.subquery_string().format(
-                    query=value.builder.get_grammar().process_wheres(
-                        strip_first_where=True
+                grammar = value.builder.get_grammar()
+                query_value = (
+                    self.subquery_string()
+                    .format(
+                        query=grammar.process_wheres(
+                            qmark=qmark, strip_first_where=True
+                        )
                     )
+                    .replace("(  ", "(")
                 )
+                if grammar._bindings:
+                    self.add_binding(grammar._bindings)
                 sql_string = self.where_group_string()
             elif isinstance(value, SubSelectExpression):
-                query_value = self.subquery_string().format(
-                    query=value.builder.to_sql()
-                )
+                if qmark:
+                    query_from_builder = value.builder.to_qmark()
+                    if value.builder._bindings:
+                        self.add_binding(*value.builder._bindings)
+                else:
+                    query_from_builder = value.builder.to_sql()
+                query_value = self.subquery_string().format(query=query_from_builder)
             elif isinstance(value, list):
                 query_value = "("
                 for val in value:
@@ -569,10 +625,16 @@ class BaseGrammar:
                     value is not True
                     and value_type != "value_equals"
                     and value_type != "NULL"
+                    and value_type != "BETWEEN"
                 ):
                     self.add_binding(value)
             elif value_type == "value":
-                query_value = self.value_string().format(value=value, separator="")
+                if qmark:
+                    query_value = "'?'"
+                else:
+                    query_value = self.value_string().format(value=value, separator="")
+
+                self.add_binding(value)
             elif value_type == "column":
                 query_value = self._table_column_string(column=value, separator="")
             elif value_type == "having":
@@ -594,7 +656,10 @@ class BaseGrammar:
         Arguments:
             binding {string} -- A value to bind.
         """
-        self._bindings.append(binding)
+        if isinstance(binding, list):
+            self._bindings += binding
+        else:
+            self._bindings.append(binding)
 
     def column_exists(self, column):
         """Check if a column exists
@@ -621,6 +686,9 @@ class BaseGrammar:
             clean_table=self.table,
         )
         return self
+
+    def wrap_table(self, table_name):
+        return self.table_string().format(table=table_name)
 
     def process_exists(self):
         """Specifies the column exists expression.
@@ -651,7 +719,7 @@ class BaseGrammar:
         return re.sub(" +", " ", self._sql.strip())
 
     # TODO: Inspect this can't just be used by another method. seems duplicative
-    def process_columns(self, separator="", action="select"):
+    def process_columns(self, separator="", action="select", qmark=False):
         """Specifies the columns in a selection expression.
 
         Keyword Arguments:
@@ -666,16 +734,19 @@ class BaseGrammar:
             if isinstance(column, SelectExpression):
                 alias = column.alias
                 if column.raw:
-                    sql += column.column
+                    sql += column.column + ", "
                     continue
 
                 column = column.column
 
             if isinstance(column, SubGroupExpression):
-                builder_sql = column.builder.to_qmark()
-                sql += f"({builder_sql}) as {column.alias}, "
-                if column.builder._bindings:
-                    self.add_binding(*column.builder._bindings)
+                if qmark:
+                    builder_sql = column.builder.to_qmark()
+                    if column.builder._bindings:
+                        self.add_binding(*column.builder._bindings)
+                else:
+                    builder_sql = column.builder.to_sql()
+                sql += f"({builder_sql}) AS {column.alias}, "
                 continue
 
             sql += self._table_column_string(column, alias=alias, separator=separator)
@@ -830,6 +901,15 @@ class BaseGrammar:
         )
         return self
 
-    def truncate_table(self, table):
-        self._sql = self.truncate_table_string().format(table=self.process_table(table))
-        return self
+    def truncate_table(self, table, foreign_keys=False):
+        """Specifies a truncate table expression.
+
+        Arguments;
+            table {string} -- The name of the table to truncate.
+
+        Returns:
+            self
+        """
+        raise NotImplementedError(
+            f"'{self.__class__.__name__}' does not support truncating"
+        )
